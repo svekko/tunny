@@ -25,8 +25,11 @@ package tunny
 // workRequest is a struct containing context representing a workers intention
 // to receive a work payload.
 type workRequest struct {
-	// jobChan is used to send the payload to this worker.
+	// jobChan is used to send low-priority (default) payload to this worker.
 	jobChan chan<- interface{}
+
+	// highPriorityJobChan is used to send high-priority payload to this worker.
+	highPriorityJobChan chan<- interface{}
 
 	// retChan is used to read the result from this worker.
 	retChan <-chan interface{}
@@ -80,7 +83,10 @@ func (w *workerWrapper) interrupt() {
 }
 
 func (w *workerWrapper) run() {
-	jobChan, retChan := make(chan interface{}), make(chan interface{})
+	jobChan := make(chan interface{})
+	highPriorityJobChan := make(chan interface{})
+	retChan := make(chan interface{})
+
 	defer func() {
 		w.worker.Terminate()
 		close(retChan)
@@ -92,18 +98,40 @@ func (w *workerWrapper) run() {
 		w.worker.BlockUntilReady()
 		select {
 		case w.reqChan <- workRequest{
-			jobChan:       jobChan,
-			retChan:       retChan,
-			interruptFunc: w.interrupt,
+			jobChan:             jobChan,
+			highPriorityJobChan: highPriorityJobChan,
+			retChan:             retChan,
+			interruptFunc:       w.interrupt,
 		}:
-			select {
-			case payload := <-jobChan:
+			processPayload := func(payload interface{}) {
 				result := w.worker.Process(payload)
 				select {
 				case retChan <- result:
 				case <-w.interruptChan:
 					w.interruptChan = make(chan struct{})
 				}
+			}
+
+			processed := false
+
+			// Always handle backlogged jobs
+			// from high-priority channel first
+			select {
+			case payload := <-highPriorityJobChan:
+				processPayload(payload)
+				processed = true
+			default:
+			}
+
+			if processed {
+				continue
+			}
+
+			select {
+			case payload := <-jobChan:
+				processPayload(payload)
+			case payload := <-highPriorityJobChan:
+				processPayload(payload)
 			case _, _ = <-w.interruptChan:
 				w.interruptChan = make(chan struct{})
 			}

@@ -118,6 +118,10 @@ implementation of channels and select blocks a stack of backlogged jobs will be
 processed as a FIFO queue. However, this behaviour is not part of the spec and
 should not be relied upon.
 
+However, there is a possibility to create higher priority 
+backlogged jobs using `ProcessHighPriority` and `ProcessTimedHighPriority`.
+Those jobs will be with higher priority than jobs created with `Process` and `ProcessTimed`.
+
 [1]: https://godoc.org/github.com/Jeffail/tunny?status.svg
 [2]: http://godoc.org/github.com/Jeffail/tunny
 [3]: https://goreportcard.com/badge/github.com/Jeffail/tunny

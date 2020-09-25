@@ -150,6 +150,15 @@ func NewCallback(n int) *Pool {
 // result. Process can be called safely by any goroutines, but will panic if the
 // Pool has been stopped.
 func (p *Pool) Process(payload interface{}) interface{} {
+	return p.process(payload, false)
+}
+
+// ProcessHighPriority is same as Process, but with high-priority
+func (p *Pool) ProcessHighPriority(payload interface{}) interface{} {
+	return p.process(payload, true)
+}
+
+func (p *Pool) process(payload interface{}, highPriority bool) interface{} {
 	atomic.AddInt64(&p.queuedJobs, 1)
 
 	request, open := <-p.reqChan
@@ -157,7 +166,12 @@ func (p *Pool) Process(payload interface{}) interface{} {
 		panic(ErrPoolNotRunning)
 	}
 
-	request.jobChan <- payload
+	jobChan := request.jobChan
+	if highPriority {
+		jobChan = request.highPriorityJobChan
+	}
+
+	jobChan <- payload
 
 	payload, open = <-request.retChan
 	if !open {
@@ -176,6 +190,22 @@ func (p *Pool) ProcessTimed(
 	payload interface{},
 	timeout time.Duration,
 ) (interface{}, error) {
+	return p.processTimed(payload, timeout, false)
+}
+
+// ProcessTimedHighPriority is same as ProcessTimed, but with high-priority
+func (p *Pool) ProcessTimedHighPriority(
+	payload interface{},
+	timeout time.Duration,
+) (interface{}, error) {
+	return p.processTimed(payload, timeout, true)
+}
+
+func (p *Pool) processTimed(
+	payload interface{},
+	timeout time.Duration,
+	highPriority bool,
+) (interface{}, error) {
 	atomic.AddInt64(&p.queuedJobs, 1)
 	defer atomic.AddInt64(&p.queuedJobs, -1)
 
@@ -193,8 +223,13 @@ func (p *Pool) ProcessTimed(
 		return nil, ErrJobTimedOut
 	}
 
+	jobChan := request.jobChan
+	if highPriority {
+		jobChan = request.highPriorityJobChan
+	}
+
 	select {
-	case request.jobChan <- payload:
+	case jobChan <- payload:
 	case <-tout.C:
 		request.interruptFunc()
 		return nil, ErrJobTimedOut

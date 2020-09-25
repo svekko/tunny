@@ -106,6 +106,90 @@ func TestFuncJobTimed(t *testing.T) {
 	}
 }
 
+func TestFuncJobHighPriority(t *testing.T) {
+	jobRunTime := 10 * time.Millisecond
+
+	tcases := []struct {
+		name    string
+		timeout time.Duration
+		err     error
+	}{
+		{name: "no timeout", err: nil},
+		{name: "fails with timeout", timeout: jobRunTime / 2, err: ErrJobTimedOut},
+		{name: "with timeout - OK", timeout: 5 * jobRunTime, err: nil},
+	}
+
+	for _, tcase := range tcases {
+		t.Run(tcase.name, func(t *testing.T) {
+			wg := sync.WaitGroup{}
+
+			poolSize := 3
+			lowPriorityValues := 6
+			totalValues := lowPriorityValues + 1
+
+			outChan := make(chan int, totalValues)
+			poolFullChan := make(chan struct{})
+
+			highPriorityValue := 999
+			highPriorityIndex := poolSize
+
+			pool := NewFunc(poolSize, func(in interface{}) interface{} {
+				defer wg.Done()
+				outChan <- in.(int)
+
+				if in.(int) == poolSize {
+					close(poolFullChan)
+				}
+
+				// Must sleep enough to get the pool full at least momentarily
+				time.Sleep(jobRunTime)
+				return nil
+			})
+
+			defer pool.Close()
+			allProcessed := make(chan struct{})
+
+			// Overfill the worker pool in the background
+			go func() {
+				for i := 1; i <= lowPriorityValues; i++ {
+					wg.Add(1)
+					pool.Process(i)
+				}
+
+				close(allProcessed)
+			}()
+
+			<-poolFullChan
+
+			wg.Add(1)
+			if tcase.timeout > 0 {
+				_, err := pool.ProcessTimedHighPriority(highPriorityValue, tcase.timeout)
+				if err != tcase.err {
+					t.Fatalf("expected error to be %v, was %v", tcase.err, err)
+				}
+			} else {
+				pool.ProcessHighPriority(highPriorityValue)
+			}
+
+			<-allProcessed
+			wg.Wait()
+
+			close(outChan)
+			processed := 0
+
+			for elem := range outChan {
+				if processed == highPriorityIndex && elem != highPriorityValue {
+					t.Fatalf("expected processed value to be %d, was %d", highPriorityValue, elem)
+				}
+				processed++
+			}
+			if processed != totalValues {
+				t.Fatalf("expected %d processed values, got %d", totalValues, processed)
+			}
+		})
+	}
+}
+
 func TestCallbackJob(t *testing.T) {
 	pool := NewCallback(10)
 	defer pool.Close()
